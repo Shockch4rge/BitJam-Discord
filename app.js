@@ -1,5 +1,5 @@
 const { Client, Intents, MessageEmbed } = require('discord.js');
-const { getVoiceConnection, joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus } = require('@discordjs/voice')
+const { getVoiceConnection, joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice')
 const searchYt = require('youtube-search')
 const ytdl = require('ytdl-core')
 
@@ -26,6 +26,8 @@ const player = createAudioPlayer()
 
 bot.once('ready', () => {
     console.log("BitJam is ready!")
+
+    bot.user.setPresence({ activities: [{ type: 'LISTENING', name: ">>help"}], status: 'online' })
 })
 
 bot.on('messageCreate', async message => {
@@ -88,10 +90,10 @@ bot.on('messageCreate', async message => {
     }
 })
 
-async function playSong(messageChannel, voiceConnection, voiceChannel) {
-    const stream = ytdl(musicUrls[0], { filter: 'audioonly'})
-    // const dispatcher = voiceConnection.
-}
+// async function playSong(messageChannel, voiceConnection, voiceChannel) {
+//     const stream = ytdl(musicUrls[0], { filter: 'audioonly'})
+//     const dispatcher = voiceConnection.
+// }
 
 // Search for a song
 bot.on('messageCreate', async message => {
@@ -181,25 +183,32 @@ bot.on('messageCreate', async message => {
         const isUserInVc = message.member.voice.channel
 
         if (!isUserInVc) { 
-            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❌  You must be in a voice channel to use this command!")] })
+            return message.channel.send(
+                { embeds: [new MessageEmbed()
+                    .setTitle("❌  You must be in a voice channel to use this command!")
+                    .setColor('RED')] }
+            ).then(embed => waitToDelete(embed))
         }
 
-        let args = message.content.split(/\s+/)
-        let providedUrl = args[1]
+        // Try to get url from second substring
+        let providedUrl = message.content.split(/\s+/)[1]
         
-        if (providedUrl == null || providedUrl.length <= 0) {
-            return await message.channel.send(
-                { embeds: [new MessageEmbed().setTitle("❓  You didn't provide a link!").setDescription("Use `>>play <link>` instead.")] }
-            )
+        if (providedUrl === undefined || providedUrl.length <= 0 || !providedUrl.endsWith(".mp3")) {
+            return message.channel.send(
+                { embeds: [new MessageEmbed()
+                    .setTitle("❓  You didn't provide a (valid) link!")
+                    .setDescription("Use `>>play <link>` or/and make sure it's a .mp3 file.")] }
+            ).then(embed => waitToDelete(embed))
         }
         
-        let audioResource = createAudioResource(providedUrl)
-        await message.delete().catch(err => console.log("(BitJam) -> ", `Could not delete message: ${message.content}`))
+        const audioResource = createAudioResource(providedUrl)
+
+        waitToDelete(message)
     
         const connection = joinVoiceChannel(
             {
                 channelId: message.member.voice.channelId,
-                guildId: message.guild.id,
+                guildId: message.guildId,
                 adapterCreator: message.guild.voiceAdapterCreator
             }
         )
@@ -208,14 +217,19 @@ bot.on('messageCreate', async message => {
         player.play(audioResource)
 
         await message.channel.send(
-            { embeds: [new MessageEmbed().setTitle("✅  Playing audio...").setColor('GREEN')]}
+            { embeds: [new MessageEmbed().setTitle("✅  Playing audio...").setColor('GREEN')] }
         )
-
-        player.on('stateChange', (oldState, newState) => {
-            if (newState.status === AudioPlayerStatus.AutoPaused) {
-                return message.channel.send({ embeds: [new MessageEmbed().setTitle(`👋  Disconnected from ${message.member.voice.channel.name}`)] })
+        
+        connection.on('stateChange', async (oldState, newState) => {
+            if (newState.status == VoiceConnectionStatus.Disconnected) {
+                return message.channel.send(
+                    { embeds: [new MessageEmbed()
+                        .setTitle(`👋  Disconnected from ${message.member.voice.channel.name}`)] }
+                ).then(embed => waitToDelete(embed))
             }
         })
+
+        connection.disconnect()
     }
 
 })
@@ -230,111 +244,30 @@ bot.on('messageCreate', async message => {
         let isUserInVc = message.member.voice.channel
 
         if (!isUserInVc) { 
-            return await message.channel.send(
-                { embeds: [new MessageEmbed().setTitle("❌ You must be in a voice channel to use this command!")] }).catch(err => console.log(err)
-            )
+            return message.channel.send(
+                { embeds: [new MessageEmbed()
+                    .setTitle("❌ You must be in a voice channel to use this command!")
+                    .setColor('RED')] }
+            ).then(embed => waitToDelete(embed))
         }
 
         if (player.state.status === AudioPlayerStatus.AutoPaused || AudioPlayerStatus.Paused) {
-            return await message.channel.send({ content: "❗ The player is already paused."}).catch(err => console.log(err))
+            return message.channel.send(
+                { embeds: [new MessageEmbed().setTitle("❗ The player is already paused.")] }
+            ).then(embed => waitToDelete(embed))
         }
         
         if (player.state.status === AudioPlayerStatus.Idle) {
-            return await message.channel.send({ content: "❗ The player is idle."})
+            return message.channel.send(
+                { embeds: [new MessageEmbed().setTitle("❗ The player is idle.")] }
+            ).then(embed => waitToDelete(embed))
         }
 
         player.pause()
     }
 })
 
-// Next song in queue
-bot.on('messageCreate', async message => {
-    if (message.author.bot) return 
-
-    let command = message.content.toLowerCase()
-
-    if (command === `${PREFIX}next`) {
-        await message.channel.send({ content: "skipping to next song..." })
-    }
-})
-
-// Back song in queue
-bot.on('messageCreate', async message => {
-    if (message.author.bot) return 
-
-    let command = message.content.toLowerCase()
-
-    if (command === `${PREFIX}back`) {
-        await message.channel.send({ content: "skipping to previous song..." })
-    }
-})
-
-// Loop playlist -> song -> no loop
-bot.on('messageCreate', async message => {
-    if (message.author.bot) return 
-
-    let command = message.content.toLowerCase()
-
-    if (command === `${PREFIX}loop`) {
-        // get current looping state
-        // disable loop if true, enable if false
-    }
-})
-
-// Join VC
-bot.on('messageCreate', async message => {
-    if (message.author.bot) return 
-
-    let command = message.content.toLowerCase()
-
-    if (command === `${PREFIX}hi`) {
-        let isUserInVc = message.member.voice.channelId
-
-        if (!isUserInVc) { 
-            return await message.channel.send({ content: "❌ You must be in a voice channel to use this command!" })
-        }
-
-        const connection = joinVoiceChannel(
-            {
-                channelId: message.member.voice.channelId,
-                guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator
-            }
-        )
-        
-        connection.subscribe(player)
-        
-    }
-})
-
-// Leave VC
-bot.on('messageCreate', async message => {
-    if (message.author.bot) return 
-
-    let command = message.content.toLowerCase()
-
-    if (command === `${PREFIX}bye`) {
-        let isUserInVc = message.member.voice.channelId
-
-        if (!isUserInVc) { 
-            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❌ You must be in a voice channel to use this command!")] })
-        }
-
-        let alreadyConnected = getVoiceConnection(message.member.voice.guild.id)
-
-        if (alreadyConnected == null) {
-            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❓ I'm not connected to a voice channel!" )] })
-        }
-
-        const connection = joinVoiceChannel(
-            {
-                channelId: message.member.voice.channelId,
-                guildId: message.guild.id,
-                adapterCreator: message.guild.voiceAdapterCreator
-            }
-        )
-
-        connection.subscribe(player) 
-        connection.destroy()
-    }
-})
+// decide between promises and async/await
+const waitToDelete = msg => {
+    setTimeout(() => msg.delete().catch(_ => console.warn("(BitJam) => Could not delete message.")), 8000)
+}
