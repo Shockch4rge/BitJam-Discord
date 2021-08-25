@@ -61,13 +61,15 @@ bot.on('messageCreate', async message => {
                 // Bot isn't connected to vc
                 else {
                     try {
-                        joinVoiceChannel(
+                        const connection = joinVoiceChannel(
                             {
                                 channelId: message.member.voice.channelId,
                                 guildId: message.guild.id,
                                 adapterCreator: message.guild.voiceAdapterCreator
                             }
                         )
+
+                        connection.subscribe(player)
                     }
                     catch(err) {
                         console.log(err)
@@ -81,7 +83,7 @@ bot.on('messageCreate', async message => {
         }
         // Not a valid URL provided
         else {
-            return await message.channel.send({ content: "Not a valid url!" })
+            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❌  Not a valid URL!")] })
         }
     }
 })
@@ -121,11 +123,9 @@ bot.on('messageCreate', async message => {
 
         let fetched = await searchYt(query.first().content, opts).catch(err => console.log(err))
 
-
         if (fetched) {
-            let youtubeResults = fetched.results
-            
             let i = 0
+            let youtubeResults = fetched.results
 
             let titles = youtubeResults.map(result => {
                 i++
@@ -148,7 +148,9 @@ bot.on('messageCreate', async message => {
             let choice = await message.channel.awaitMessages(
                 {
                     filter,
-                    max: 1
+                    max: 1,
+                    time: 30000,
+                    errors: ['time']
                 }
             ).catch(err => console.log(err))
             
@@ -175,21 +177,25 @@ bot.on('messageCreate', async message => {
 
     let command = message.content.toLowerCase()
 
-    if (command === `${PREFIX}play`) {
-        let isUserInVc = message.member.voice.channel
+    if (command.startsWith(`${PREFIX}play`)) {
+        const isUserInVc = message.member.voice.channel
 
-        if (!isUserInVc) return await message.channel.send(
-            { content: "❌ You must be in a voice channel to use this command!" }
-        )
+        if (!isUserInVc) { 
+            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❌  You must be in a voice channel to use this command!")] })
+        }
 
-        await message.channel.send(
-            { embeds: [new MessageEmbed().setTitle("Paste link here:")] }
-        )
+        let args = message.content.split(/\s+/)
+        let providedUrl = args[1]
         
-        let filter = m => m.author.id === message.author.id
-        let collected = await message.channel.awaitMessages({ filter, max: 1 })
-        let audioFile = createAudioResource(collected.first().content)
+        if (providedUrl == null || providedUrl.length <= 0) {
+            return await message.channel.send(
+                { embeds: [new MessageEmbed().setTitle("❓  You didn't provide a link!").setDescription("Use `>>play <link>` instead.")] }
+            )
+        }
         
+        let audioResource = createAudioResource(providedUrl)
+        await message.delete().catch(err => console.log("(BitJam) -> ", `Could not delete message: ${message.content}`))
+    
         const connection = joinVoiceChannel(
             {
                 channelId: message.member.voice.channelId,
@@ -197,10 +203,19 @@ bot.on('messageCreate', async message => {
                 adapterCreator: message.guild.voiceAdapterCreator
             }
         )
-        
-        player.play(audioFile)
-        connection.subscribe(player)
 
+        connection.subscribe(player)
+        player.play(audioResource)
+
+        await message.channel.send(
+            { embeds: [new MessageEmbed().setTitle("✅  Playing audio...").setColor('GREEN')]}
+        )
+
+        player.on('stateChange', (oldState, newState) => {
+            if (newState.status === AudioPlayerStatus.AutoPaused) {
+                return message.channel.send({ embeds: [new MessageEmbed().setTitle(`👋  Disconnected from ${message.member.voice.channel.name}`)] })
+            }
+        })
     }
 
 })
@@ -214,13 +229,19 @@ bot.on('messageCreate', async message => {
     if (command === `${PREFIX}pause`) {
         let isUserInVc = message.member.voice.channel
 
-        if (!isUserInVc) return await message.channel.send(
-            { content: "❌ You must be in a voice channel to use this command!" }
-        )
+        if (!isUserInVc) { 
+            return await message.channel.send(
+                { embeds: [new MessageEmbed().setTitle("❌ You must be in a voice channel to use this command!")] }).catch(err => console.log(err)
+            )
+        }
 
-        if (player.state === AudioPlayerStatus.Paused) return await message.channel.send(
-            { content: "The player is already paused. "}
-        )
+        if (player.state.status === AudioPlayerStatus.AutoPaused || AudioPlayerStatus.Paused) {
+            return await message.channel.send({ content: "❗ The player is already paused."}).catch(err => console.log(err))
+        }
+        
+        if (player.state.status === AudioPlayerStatus.Idle) {
+            return await message.channel.send({ content: "❗ The player is idle."})
+        }
 
         player.pause()
     }
@@ -269,17 +290,19 @@ bot.on('messageCreate', async message => {
     if (command === `${PREFIX}hi`) {
         let isUserInVc = message.member.voice.channelId
 
-        if (!isUserInVc) return await message.channel.send(
-            { content: "❌ You must be in a voice channel to use this command!" }
-        )
+        if (!isUserInVc) { 
+            return await message.channel.send({ content: "❌ You must be in a voice channel to use this command!" })
+        }
 
-        joinVoiceChannel(
+        const connection = joinVoiceChannel(
             {
                 channelId: message.member.voice.channelId,
                 guildId: message.guild.id,
                 adapterCreator: message.guild.voiceAdapterCreator
             }
         )
+        
+        connection.subscribe(player)
         
     }
 })
@@ -291,6 +314,27 @@ bot.on('messageCreate', async message => {
     let command = message.content.toLowerCase()
 
     if (command === `${PREFIX}bye`) {
-        await message.channel.send({ content: "Bye bye!" })
+        let isUserInVc = message.member.voice.channelId
+
+        if (!isUserInVc) { 
+            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❌ You must be in a voice channel to use this command!")] })
+        }
+
+        let alreadyConnected = getVoiceConnection(message.member.voice.guild.id)
+
+        if (alreadyConnected == null) {
+            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❓ I'm not connected to a voice channel!" )] })
+        }
+
+        const connection = joinVoiceChannel(
+            {
+                channelId: message.member.voice.channelId,
+                guildId: message.guild.id,
+                adapterCreator: message.guild.voiceAdapterCreator
+            }
+        )
+
+        connection.subscribe(player) 
+        connection.destroy()
     }
 })
