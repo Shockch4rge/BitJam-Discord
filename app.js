@@ -3,13 +3,15 @@ const { getVoiceConnection, joinVoiceChannel, createAudioPlayer, createAudioReso
 const searchYt = require('youtube-search')
 const ytdl = require('ytdl-core')
 
-const bot = new Client({ 
-    intents: [
-        Intents.FLAGS.GUILDS,
-        Intents.FLAGS.GUILD_MESSAGES,
-        Intents.FLAGS.GUILD_VOICE_STATES
-    ] 
-})
+const bot = new Client(
+    { 
+        intents: [
+            Intents.FLAGS.GUILDS,
+            Intents.FLAGS.GUILD_MESSAGES,
+            Intents.FLAGS.GUILD_VOICE_STATES
+        ] 
+    }
+)
 const config = require('./config.json')
 const auth = require('./auth.json')
 const PREFIX = config.PREFIX
@@ -154,7 +156,11 @@ bot.on('messageCreate', async message => {
                     time: 30000,
                     errors: ['time']
                 }
-            ).catch(err => console.log(err))
+            ).catch(_ => {
+                return message.delete().catch(_ => console.log("Could not delete message."))
+                    .then(message.channel.send({ embeds: [new MessageEmbed().setTitle("❗  You ran out of time!")] 
+                }))
+            })
             
             let selected = youtubeResults[choice.first().content - 1]
 
@@ -169,10 +175,7 @@ bot.on('messageCreate', async message => {
     }
 })
 
-/**
- * 
- * Play
- */
+// Play
 bot.on('messageCreate', async message => {
     if (message.author.bot) return
     if (message.author != "217601815301062656") return
@@ -183,28 +186,36 @@ bot.on('messageCreate', async message => {
         const isUserInVc = message.member.voice.channel
 
         if (!isUserInVc) { 
-            return message.channel.send(
-                { embeds: [new MessageEmbed()
+            const warning = message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
                     .setTitle("❌  You must be in a voice channel to use this command!")
-                    .setColor('RED')] }
-            ).then(embed => waitToDelete(embed))
+                    .setColor('RED')] 
+                }
+            )
+            await delay(7000)
+            return await warning.delete().catch()
         }
 
         // Try to get url from second substring
-        let providedUrl = message.content.split(/\s+/)[1]
+        let providedLink = message.content.split(/\s+/)[1]
         
-        if (providedUrl === undefined || providedUrl.length <= 0 || !providedUrl.endsWith(".mp3")) {
-            return message.channel.send(
-                { embeds: [new MessageEmbed()
+        if (!providedLink || providedLink.length <= 0 || !providedLink.includes("mp3")) {
+            const warning = await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
                     .setTitle("❓  You didn't provide a (valid) link!")
-                    .setDescription("Use `>>play <link>` or/and make sure it's a .mp3 file.")] }
-            ).then(embed => waitToDelete(embed))
+                    .setDescription("Use `>>play <link>` and make sure it's a .mp3 file.")] 
+                }
+            )
+            await delay(7000)
+            return await warning.delete().catch()
         }
         
-        const audioResource = createAudioResource(providedUrl)
+        // Delete the user command if link is accepted
+        await message.delete().catch()
 
-        waitToDelete(message)
-    
+        const audioResource = createAudioResource(providedLink)
         const connection = joinVoiceChannel(
             {
                 channelId: message.member.voice.channelId,
@@ -216,22 +227,22 @@ bot.on('messageCreate', async message => {
         connection.subscribe(player)
         player.play(audioResource)
 
-        await message.channel.send(
-            { embeds: [new MessageEmbed().setTitle("✅  Playing audio...").setColor('GREEN')] }
-        )
+        const playingMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("✅  Playing audio...").setColor('GREEN')] })
         
-        connection.on('stateChange', async (oldState, newState) => {
-            if (newState.status == VoiceConnectionStatus.Disconnected) {
-                return message.channel.send(
-                    { embeds: [new MessageEmbed()
-                        .setTitle(`👋  Disconnected from ${message.member.voice.channel.name}`)] }
-                ).then(embed => waitToDelete(embed))
-            }
+        player.on(AudioPlayerStatus.Idle, async (o, n) => {
+            await playingMsg.delete().catch()
+            const finishedMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("Finished playing!").setColor('GOLD')] })
+            await delay(5000)
+            return await finishedMsg.delete().catch()
         })
 
-        connection.disconnect()
+        connection.on(VoiceConnectionStatus.Disconnected, async (o, n) => {
+            await playingMsg.delete().catch()
+            const disconnectedMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("👋  Disconnected. Bye!")] })
+            await delay(5000)
+            return await disconnectedMsg.delete().catch()
+        })
     }
-
 })
 
 // Pause
@@ -244,30 +255,36 @@ bot.on('messageCreate', async message => {
         let isUserInVc = message.member.voice.channel
 
         if (!isUserInVc) { 
-            return message.channel.send(
-                { embeds: [new MessageEmbed()
+            const warning = await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
                     .setTitle("❌ You must be in a voice channel to use this command!")
-                    .setColor('RED')] }
-            ).then(embed => waitToDelete(embed))
-        }
-
-        if (player.state.status === AudioPlayerStatus.AutoPaused || AudioPlayerStatus.Paused) {
-            return message.channel.send(
-                { embeds: [new MessageEmbed().setTitle("❗ The player is already paused.")] }
-            ).then(embed => waitToDelete(embed))
+                    .setColor('RED')] 
+                }
+            )
+            await delay(7000)
+            return await warning.delete().catch()
         }
         
-        if (player.state.status === AudioPlayerStatus.Idle) {
-            return message.channel.send(
-                { embeds: [new MessageEmbed().setTitle("❗ The player is idle.")] }
-            ).then(embed => waitToDelete(embed))
+        if (AudioPlayerStatus.AutoPaused || AudioPlayerStatus.Paused) {
+            await message.delete().catch()
+            const warning = await message.channel.send({ embeds: [new MessageEmbed().setTitle("❗ The player is already paused.")] })
+            await delay(5000)
+            return await warning.delete().catch()
+        }
+        else if (AudioPlayerStatus.Idle) {
+            await message.delete().catch()
+            const warning = await message.channel.send({ embeds: [new MessageEmbed().setTitle("❗ The player is currently idle.")] })
+            await delay(5000)
+            return await warning.delete().catch()
         }
 
         player.pause()
     }
 })
 
-// decide between promises and async/await
-const waitToDelete = msg => {
-    setTimeout(() => msg.delete().catch(_ => console.warn("(BitJam) => Could not delete message.")), 8000)
+const delay = t => {
+    return new Promise(resolve => {
+        setTimeout(resolve, t)
+    })
 }
