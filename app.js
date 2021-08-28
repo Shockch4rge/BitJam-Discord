@@ -1,5 +1,5 @@
-const { Client, Intents, MessageEmbed } = require('discord.js');
-const { getVoiceConnection, joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus } = require('@discordjs/voice')
+const { Client, Intents, MessageEmbed, Message } = require('discord.js');
+const { getVoiceConnection, joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, VoiceConnection } = require('@discordjs/voice')
 const searchYt = require('youtube-search')
 const ytdl = require('ytdl-core')
 
@@ -22,14 +22,12 @@ const opts = {
 }
 bot.login(auth.BOT_TOKEN)
 
-
 const queue = []
 const player = createAudioPlayer()
 
 bot.once('ready', () => {
     console.log("BitJam is ready!")
-
-    bot.user.setPresence({ activities: [{ type: 'LISTENING', name: ">>help"}], status: 'online' })
+    bot.user.setPresence({ activities: [{ type: 'LISTENING', name: ">>help" }], status: 'online' })
 })
 
 bot.on('messageCreate', async message => {
@@ -38,64 +36,82 @@ bot.on('messageCreate', async message => {
 
     let command = message.content.toLowerCase()
 
-    if (command.startsWith(`${PREFIX}query`)) {
-        // MC Weebs vc
-        let voiceChannel = message.guild.channels.cache.find(channel => channel.id === "648180890178027531")
-        let query = message.content.split(" ")
-        let url = query[1]
+    if (command.startsWith(`${PREFIX}test`)) {
+        let isUserInVc = message.member.voice.channel
 
-        let isValidUrl = ytdl.validateURL(url)
+        if (isUserInVc) {
+            let connection
 
-        if (isValidUrl) {
-            console.log("Valid URL!")
+            connection = joinVoiceChannel(
+                {
+                    channelId: message.member.voice.channelId,
+                    guildId: message.guildId,
+                    adapterCreator: message.guild.voiceAdapterCreator
+                }
+            )
+            connection.subscribe(player)
 
-            let isInQueue = queue.some(Url => Url === url)
-
-            if (!isInQueue) {
+            let url = message.content.split(/\s+/)[1]
+            let isValidUrl = ytdl.validateURL(url)
+            
+            if (isValidUrl) {
+                console.log("Valid URL")
                 queue.push(url)
-
-                if (voiceChannel === null) {
-                    console.log("Connection exists")
-
-                    let embed = new MessageEmbed()
-                        .setAuthor(bot.user.username, bot.user.displayAvatarURL)
-                        //!!!!
-                        .setDescription("You've successfully added " + songName + " to the queue!")
-                }
-                // Bot isn't connected to vc
-                else {
-                    try {
-                        const connection = joinVoiceChannel(
-                            {
-                                channelId: message.member.voice.channelId,
-                                guildId: message.guild.id,
-                                adapterCreator: message.guild.voiceAdapterCreator
-                            }
-                        )
-
-                        connection.subscribe(player)
-                    }
-                    catch(err) {
-                        console.log(err)
-                    }
-                }
+                await message.channel.send({ content: "You've successfully added to the queue!" })
+                await playSong()
             }
-            // Provided URL is already in the queue
+            // Invalid URL
             else {
-
+                await message.delete().catch()
+                let warning = await message.channel.send(
+                    {
+                        embeds: [new MessageEmbed()
+                            .setAuthor("Invalid URL!", getBotAvatar())
+                            .setColor('RED')
+                        ]
+                    }
+                )
+                await delay(7000)
+                return await warning.delete().catch()
             }
         }
-        // Not a valid URL provided
+        // User is not in VC
         else {
-            return await message.channel.send({ embeds: [new MessageEmbed().setTitle("❌  Not a valid URL!")] })
+            await message.delete().catch()
+            let warning = await message.channel.send(
+                {
+                    embeds: [new MessageEmbed()
+                        .setAuthor("You must be in a voice channel to use this command!", getBotAvatar())
+                        .setColor('RED')
+                    ]
+                }
+            )
+            await delay(7000)
+            return warning.delete().catch()
         }
+               
     }
 })
 
-// async function playSong(messageChannel, voiceConnection, voiceChannel) {
-//     const stream = ytdl(musicUrls[0], { filter: 'audioonly'})
-//     const dispatcher = voiceConnection.
-// }
+const playSong = async () => {
+    const stream = ytdl(queue[0], { filter: 'audioonly' })
+    const audioResource = createAudioResource(stream)
+    player.play(audioResource)
+
+    player.on(AudioPlayerStatus.Idle, async (_o, _n) => {
+        if (audioResource.ended) {
+            queue.shift()
+    
+            if (queue.length === 0) {
+                player.stop()
+                return
+            }
+    
+            await playSong()
+        }
+       
+    })
+}
 
 // Search for a song
 bot.on('messageCreate', async message => {
@@ -105,15 +121,16 @@ bot.on('messageCreate', async message => {
     let command = message.content.toLowerCase()
 
     if (command === `${PREFIX}search`) {
-        let embed
         let filter
 
-        embed = new MessageEmbed()
-            .setColor("#C678DD")
-            .setTitle("Awaiting query...")
-            .setDescription("Search for a video!")
-
-        await message.channel.send({ embeds: [embed] })
+        await message.channel.send(
+            { 
+                embeds: [new MessageEmbed()
+                    .setColor("#C678DD")
+                    .setTitle("Awaiting query...")
+                    .setDescription("Search for a video!")] 
+            }
+        )
 
         filter = m => m.author.id === message.author.id
         
@@ -121,9 +138,15 @@ bot.on('messageCreate', async message => {
             { 
                 filter, 
                 max: 1, 
-                time: 30000 
+                time: 30000,
+                errors: ['time']
             }
-        ).catch(err => console.log(err))
+        ).catch (async _ => {
+            await message.delete().catch()
+            const timedOutMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("❗  You ran out of time!")] })
+            await delay(5000)
+            return await timedOutMsg.delete().catch()
+        })
 
         let fetched = await searchYt(query.first().content, opts).catch(err => console.log(err))
 
@@ -136,12 +159,14 @@ bot.on('messageCreate', async message => {
                 return i + ") " + result.title
             })
 
-            embed = new MessageEmbed()
-                .setColor("#C678DD")
-                .setTitle("Select the number of the song you want to use.")
-                .setDescription(titles.join("\n"))
-
-            await message.channel.send({ embeds: [embed] })
+            await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setColor("#C678DD")
+                        .setTitle("Select the number of the song you want to use.")
+                        .setDescription(titles.join("\n"))] 
+                }
+            )
 
             filter = m => 
                 m.author.id === message.author.id
@@ -156,21 +181,24 @@ bot.on('messageCreate', async message => {
                     time: 30000,
                     errors: ['time']
                 }
-            ).catch(_ => {
-                return message.delete().catch(_ => console.log("Could not delete message."))
-                    .then(message.channel.send({ embeds: [new MessageEmbed().setTitle("❗  You ran out of time!")] 
-                }))
+            ).catch(async _ => {
+                await message.delete().catch()
+                const timedOutMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("❗  You ran out of time!")] })
+                await delay(5000)
+                return await timedOutMsg.delete().catch()
             })
             
             let selected = youtubeResults[choice.first().content - 1]
 
-            embed = new MessageEmbed()
-                .setTitle(`${selected.title}`)
-                .setURL(`${selected.link}`)
-                .setDescription(`${selected.description}`)
-                .setThumbnail(`${selected.thumbnails.default.url}`)
-
-            await message.channel.send({ embeds: [embed] })
+            await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor(`${selected.title}`, getBotAvatar())
+                        .setURL(`${selected.link}`)
+                        .setDescription(`${selected.description}`)
+                        .setImage(`${selected.thumbnails.default.url}`)] 
+                }
+            )
         }
     }
 })
@@ -186,11 +214,13 @@ bot.on('messageCreate', async message => {
         const isUserInVc = message.member.voice.channel
 
         if (!isUserInVc) { 
-            const warning = message.channel.send(
+            await message.react('❌').catch()
+            let warning = await message.channel.send(
                 { 
                     embeds: [new MessageEmbed()
-                    .setTitle("❌  You must be in a voice channel to use this command!")
-                    .setColor('RED')] 
+                        .setAuthor("You must be in a voice channel to use this command!", getBotAvatar())
+                        .setColor('RED')
+                    ] 
                 }
             )
             await delay(7000)
@@ -201,21 +231,45 @@ bot.on('messageCreate', async message => {
         let providedLink = message.content.split(/\s+/)[1]
         
         if (!providedLink || providedLink.length <= 0 || !providedLink.includes("mp3")) {
-            const warning = await message.channel.send(
+            await message.react('❌').catch()
+            let warning = await message.channel.send(
                 { 
                     embeds: [new MessageEmbed()
-                    .setTitle("❓  You didn't provide a (valid) link!")
-                    .setDescription("Use `>>play <link>` and make sure it's a .mp3 file.")] 
+                        .setAuthor("You didn't provide a valid link!", getBotAvatar())
+                        .setDescription("Use `>>play <link>` and make sure it's a .mp3 file.")
+                        .setColor('RED')
+                    ] 
                 }
             )
             await delay(7000)
             return await warning.delete().catch()
         }
         
+        const audioResource = createAudioResource(providedLink)
+
+        // Shouldn't be the case; check for good measure
+        if (!audioResource.playStream) {
+            throw new Error("audioResource.playStream is not valid.")
+        }
+
+        if (!audioResource.read()) {
+            let warning = await message.channel.send(
+                {
+                    embeds: [new MessageEmbed()
+                        .setAuthor("Unreadable file!", getBotAvatar())
+                        .setColor('RED')
+                    ]
+                }
+            )
+            await delay(7000)
+            return await warning.delete().catch()
+        }
+
         // Delete the user command if link is accepted
         await message.delete().catch()
 
-        const audioResource = createAudioResource(providedLink)
+        queue.push(providedLink)
+
         const connection = joinVoiceChannel(
             {
                 channelId: message.member.voice.channelId,
@@ -227,20 +281,52 @@ bot.on('messageCreate', async message => {
         connection.subscribe(player)
         player.play(audioResource)
 
-        const playingMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("✅  Playing audio...").setColor('GREEN')] })
+        await message.react('✅').catch()
+        const playingMsg = await message.channel.send(
+            { 
+                embeds: [new MessageEmbed()
+                    .setAuthor("Playing...", getBotAvatar())
+                    .setColor('GREEN')
+                ] 
+            }
+        )
         
-        player.on(AudioPlayerStatus.Idle, async (o, n) => {
-            await playingMsg.delete().catch()
-            const finishedMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("Finished playing!").setColor('GOLD')] })
-            await delay(5000)
-            return await finishedMsg.delete().catch()
+        player.on(AudioPlayerStatus.Idle, async (_o, _n) => {
+            try {
+                await playingMsg.delete()
+                const finishedMsg = await message.channel.send(
+                    { 
+                        embeds: [new MessageEmbed()
+                            .setAuthor("Finished playing!", getBotAvatar())
+                            .setColor('GOLD')
+                        ] 
+                    }
+                )
+                await delay(5000)
+                return await finishedMsg.delete()
+            }
+            catch (_) {
+                // unimportant errors
+            }
         })
 
-        connection.on(VoiceConnectionStatus.Disconnected, async (o, n) => {
-            await playingMsg.delete().catch()
-            const disconnectedMsg = await message.channel.send({ embeds: [new MessageEmbed().setTitle("👋  Disconnected. Bye!")] })
-            await delay(5000)
-            return await disconnectedMsg.delete().catch()
+        connection.on(VoiceConnectionStatus.Disconnected, async (_o, _n) => {
+            try {
+                queue.length = 0
+                await playingMsg.delete()
+                const disconnectedMsg = await message.channel.send(
+                    { 
+                        embeds: [new MessageEmbed()
+                            .setAuthor("Disconnected. Bye!", getBotAvatar())
+                            .setColor('YELLOW')
+                        ] 
+                    }
+                )
+                await delay(5000)
+                return await disconnectedMsg.delete()
+            }
+            catch (_) {
+            }
         })
     }
 })
@@ -255,33 +341,237 @@ bot.on('messageCreate', async message => {
         let isUserInVc = message.member.voice.channel
 
         if (!isUserInVc) { 
-            const warning = await message.channel.send(
+            try {
+                await message.react('❌')
+                let warning = await message.channel.send(
+                    { 
+                        embeds: [new MessageEmbed()
+                            .setAuthor("You must be in a voice channel to use this command!", getBotAvatar())
+                            .setColor('RED')
+                        ] 
+                    }
+                )
+                await delay(7000)
+                return await warning.delete()
+            } 
+            catch (_) {
+            }
+        }
+
+        let playerStatus = player.state.status
+
+        if (playerStatus == AudioPlayerStatus.AutoPaused || playerStatus == AudioPlayerStatus.Paused) {
+            try {
+                await message.delete()
+                let warning = await message.channel.send(
+                    { 
+                        embeds: [new MessageEmbed()
+                            .setAuthor("The player is already paused!", getBotAvatar())
+                            .setColor('YELLOW')
+                        ] 
+                    }
+                )
+                await delay(5000)
+                return await warning.delete()
+            }
+            catch (_) {
+            }
+        }
+
+        if (playerStatus == AudioPlayerStatus.Idle) {
+            try {
+                await message.delete()
+                let warning = await message.channel.send(
+                    { 
+                        embeds: [new MessageEmbed()
+                            .setAuthor("The player is currently idle.", getBotAvatar())
+                            .setColor('YELLOW')
+                        ] 
+                    }
+                )
+                await delay(5000)
+                return await warning.delete()
+            } 
+            catch (_) {}
+        }
+
+        // Try to pause
+        const pauseSuccess = player.pause(true)
+
+        if (pauseSuccess) {
+            await message.react('✅').catch()
+            return await message.channel.send(
                 { 
                     embeds: [new MessageEmbed()
-                    .setTitle("❌ You must be in a voice channel to use this command!")
-                    .setColor('RED')] 
+                        .setAuthor("The player is now paused.", getBotAvatar())
+                        .setColor('GREEN')
+                    ] 
+                }
+            )
+        }
+        else {
+            await message.react('❓').catch()
+            return await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("Could not pause player...?", getBotAvatar())
+                        .setColor('RED')
+                    ] 
+                }
+            )
+        }
+    }
+})
+
+bot.on('messageCreate', async message => {
+    if (message.author.bot) return
+    if (message.author != "217601815301062656") return
+
+    const command = message.content.toLowerCase()
+
+    if (command === `${PREFIX}resume`) {
+        let isUserInVc = message.member.voice.channel
+
+        if (!isUserInVc) { 
+            await message.react('❌').catch()
+            let warning = await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("You must be in a voice channel to use this command!", getBotAvatar())
+                        .setColor('RED'),
+                    ] 
+                }
+            )
+            await delay(7000)
+            return await warning.delete().catch()
+        }
+
+        if (!getVoiceConnection(message.guildId) || !(getVoiceConnection(message.guildId).state.status == VoiceConnectionStatus.Ready)) {
+            await message.react('❌').catch()
+            let warning = await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("The player is not in a voice channel!", getBotAvatar())
+                        .setColor('RED')
+                    ] 
+                }
+            )
+            await delay(7000)
+            return await warning.delete().catch()
+        }
+
+        let playerStatus = player.state.status
+
+        if (playerStatus === AudioPlayerStatus.Playing || playerStatus === AudioPlayerStatus.Buffering) {
+            await message.react('❌').catch()
+            let warning = await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("Something is already playing!", getBotAvatar())
+                        .setColor('RED')
+                    ] 
                 }
             )
             await delay(7000)
             return await warning.delete().catch()
         }
         
-        if (AudioPlayerStatus.AutoPaused || AudioPlayerStatus.Paused) {
-            await message.delete().catch()
-            const warning = await message.channel.send({ embeds: [new MessageEmbed().setTitle("❗ The player is already paused.")] })
-            await delay(5000)
-            return await warning.delete().catch()
-        }
-        else if (AudioPlayerStatus.Idle) {
-            await message.delete().catch()
-            const warning = await message.channel.send({ embeds: [new MessageEmbed().setTitle("❗ The player is currently idle.")] })
-            await delay(5000)
+        else if (playerStatus === AudioPlayerStatus.Idle) {
+            await message.react('❗').catch()
+            let warning = await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("The player is idle!", getBotAvatar())
+                        .setColor('RED')
+                    ] 
+                }
+            )
+            await delay(7000)
             return await warning.delete().catch()
         }
 
-        player.pause()
+        // Try to resume
+        const resumeSuccess = player.unpause()
+
+        if (resumeSuccess) {
+            await message.react('✅').catch()
+            return await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("Resuming...", getBotAvatar())
+                        .setColor('GREEN')
+                    ] 
+                }
+            )
+        } 
+        else {
+            return await message.channel.send(
+                { 
+                    embeds: [new MessageEmbed()
+                        .setAuthor("Could not resume player...?", getBotAvatar()
+                        .setColor('RED'))
+                    ] 
+                }
+            )
+        }
     }
 })
+
+// Help
+bot.on('messageCreate', async message => {
+    if (message.author.bot) return
+
+    const command = message.content.toLowerCase()
+
+    if (command === `${PREFIX}help`) {
+        await message.delete().catch()
+
+        await message.channel.send(
+            {
+                embeds: [new MessageEmbed()
+                    .setAuthor("Commands", getBotAvatar())
+                    .setFields(
+                        [
+                            { name: "`>>play <url>`", value: "Plays an MP3 file with the 'http://' extension.", inline: true },
+                            { name: "`>>search`", value: "Searches for a song on Youtube.", inline: true }, 
+                            { name: "`>>pause`", value: "Pauses the player.", inline: true }, 
+                            { name: "`>>resume`", value: "Resumes the player.", inline: true },
+                            { name: "`>>disconnect`", value: "Disconnects the player from the current voice channel.", inline: true },
+                            { name: "`>>join`", value: "Makes the player join the current voice channel.", inline: true },
+                        ]
+                    )
+                    .setFooter("❗  All commands listed here require you to be in a voice channel.")
+                    .setColor("#2F3136")
+                ]
+            }
+        )
+    }
+}) 
+
+bot.on('messageCreate', async message => {
+    if (message.author.bot) return
+
+    const command = message.content.toLowerCase()
+
+    if (command === `${PREFIX}queue`) {
+        await message.delete().catch()
+
+        const msg = await message.channel.send(
+            {
+                embeds: [new MessageEmbed()
+                    .setAuthor(`${queue.length} ${queue.length === 1 ? "song" : "songs"} in the queue.`, getBotAvatar())
+                ]
+            }
+        )
+        await delay(15000)
+        return await msg.delete().catch()
+    }
+})
+
+// Utils
+const getBotAvatar = () => {
+    return bot.user.avatarURL({ format: 'png' })
+}
 
 const delay = t => {
     return new Promise(resolve => {
