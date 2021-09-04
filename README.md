@@ -2,10 +2,10 @@
 Not much of a versatile Discord bot, but it helps me understand Javascript and event-based architecture using Node.js. Uses the Youtube Search API v3 for song querying, and discord.js v13 for Discord v9.
 
 # Libraries:
-- [`discord.js`]
-- [`@discordjs/voice`]
-- [`ytdl-core`]
-- [`youtube-search`]
+- [discord.js]
+- [@discordjs/voice]
+- [ytdl-core]
+- [youtube-search]
 
 # Features:
 - WIP
